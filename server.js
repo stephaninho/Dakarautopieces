@@ -105,6 +105,30 @@ app.get('/', (req, res) => {
   res.json({ status: 'OK', app: 'CANASEN API', version: '1.0.0' });
 });
 
+// ── GET /api/orders/check-limit/:phone — Vérifier la limite avant soumission ──
+app.get('/api/orders/check-limit/:phone', async (req, res) => {
+  try {
+    const normalizePhone = (phone) => phone.replace(/[\s\-\+\(\)\.]/g, '');
+    const clientPhone = normalizePhone(req.params.phone);
+    const today = new Date().toLocaleDateString('fr-FR');
+    const allOrders = await getOrders();
+    const clientOrdersToday = allOrders.filter(o => {
+      const orderPhone = normalizePhone(o.client?.telephone || '');
+      const orderDate = new Date(o.timestamp).toLocaleDateString('fr-FR');
+      return orderPhone === clientPhone && orderDate === today && o.status !== 'Annulé';
+    });
+    res.json({
+      success: true,
+      phone: req.params.phone,
+      orderCountToday: clientOrdersToday.length,
+      limitReached: clientOrdersToday.length >= 3,
+      remaining: Math.max(0, 3 - clientOrdersToday.length),
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // ── GET /api/orders — Récupérer toutes les commandes (admin) ──────────────────
 app.get('/api/orders', async (req, res) => {
   try {
@@ -125,6 +149,30 @@ app.post('/api/orders', async (req, res) => {
     if (!client?.nom || !client?.telephone || !client?.email || !client?.ville) {
       return res.status(400).json({ success: false, error: 'Champs client obligatoires manquants' });
     }
+
+    // ── Limite de 3 commandes par jour par numéro de téléphone ───────────────
+    const normalizePhone = (phone) => phone.replace(/[\s\-\+\(\)\.]/g, '');
+    const clientPhone = normalizePhone(client.telephone);
+
+    const allOrders = await getOrders();
+
+    // Filtre uniquement les commandes du jour en cours
+    const today = new Date().toLocaleDateString('fr-FR');
+    const clientOrdersToday = allOrders.filter(o => {
+      const orderPhone = normalizePhone(o.client?.telephone || '');
+      const orderDate = new Date(o.timestamp).toLocaleDateString('fr-FR');
+      return orderPhone === clientPhone && orderDate === today && o.status !== 'Annulé';
+    });
+
+    if (clientOrdersToday.length >= 3) {
+      return res.status(429).json({
+        success: false,
+        limitReached: true,
+        error: `Limite de 3 commandes par jour atteinte pour le numéro ${client.telephone}. Réessayez demain ou contactez CANASEN directement au +1 438 928 7856.`,
+        existingOrders: clientOrdersToday.length,
+      });
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     const order = {
       id:        generateOrderId(),
@@ -156,6 +204,7 @@ app.post('/api/orders', async (req, res) => {
     if (piecesText) waMsg += `🔧 *Pièces (${pieces.length}):* ${piecesText}\n`;
     if (options?.couleur)      waMsg += `🎨 *Couleur:* ${options.couleur}\n`;
     if (options?.transmission) waMsg += `⚙️ *Transmission:* ${options.transmission}\n`;
+    if (options?.cylindree)    waMsg += `🔩 *Cylindrée:* ${options.cylindree}\n`;
     if (options?.carburant)    waMsg += `⛽ *Carburant:* ${options.carburant}\n`;
     if (options?.kilometrage)  waMsg += `🛣️ *Kilométrage max:* ${options.kilometrage}\n`;
     if (cart?.length)          waMsg += `🛒 *Articles:* ${cart.map(i => `${i.qty}x ${i.name}`).join(', ')}\n`;
